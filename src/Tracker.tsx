@@ -1,43 +1,63 @@
 import { useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import {
-    db,
-    addExpense,
-    updateExpense,
-    deleteExpense,
-    today,
-    type Expense,
-} from "./db";
+import { db, today, type Expense } from "./db";
 import Charts from "./Charts";
 import Budgets from "./Budgets";
 import Categories from "./Categories";
 import Recurring from "./Recurring";
 import DataTools from "./DataTools";
 import Yearly from "./Yearly";
+import ExpenseSheet from "./ExpenseSheet";
 
 const LIST_LIMIT = 200;
 
+const fmt = (n: number) =>
+    n.toLocaleString(undefined, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+    });
+
+function shiftMonth(month: string, delta: number) {
+    const [y, m] = month.split("-").map(Number);
+    const d = new Date(y, m - 1 + delta, 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function monthLabel(month: string) {
+    const [y, m] = month.split("-").map(Number);
+    return new Date(y, m - 1, 1).toLocaleDateString(undefined, {
+        month: "long",
+        year: "numeric",
+    });
+}
+
+function dayLabel(date: string) {
+    const t = today();
+    const [ty, tm, td] = t.split("-").map(Number);
+    const yesterday = new Date(ty, tm - 1, td - 1).toLocaleDateString("en-CA");
+    if (date === t) return "Today";
+    if (date === yesterday) return "Yesterday";
+    const [y, m, d] = date.split("-").map(Number);
+    return new Date(y, m - 1, d).toLocaleDateString(undefined, {
+        weekday: "short",
+        day: "numeric",
+        month: "short",
+    });
+}
+
 export default function Tracker() {
     const [month, setMonth] = useState(() => today().slice(0, 7)); // 'YYYY-MM'
-    const [amount, setAmount] = useState("");
-    const [note, setNote] = useState("");
-    const [categoryId, setCategoryId] = useState("");
+    const [sheet, setSheet] = useState<{ editing: Expense | null } | null>(
+        null,
+    );
 
     // search / filter state (these only affect the list at the bottom)
     const [search, setSearch] = useState("");
+    const [filtersOpen, setFiltersOpen] = useState(false);
     const [filterCat, setFilterCat] = useState(""); // '' = all, 'none' = uncategorized, else id
     const [minAmt, setMinAmt] = useState("");
     const [maxAmt, setMaxAmt] = useState("");
     const [allMonths, setAllMonths] = useState(false);
-
-    // editing state
-    const [editingId, setEditingId] = useState<string | null>(null);
-    const [draft, setDraft] = useState({
-        amount: "",
-        note: "",
-        category_id: "",
-        spent_on: "",
-    });
 
     const categories =
         useLiveQuery(
@@ -77,10 +97,12 @@ export default function Tracker() {
         categories.find((c) => c.id === id)?.color ?? null;
 
     const total = expenses.reduce((s, e) => s + e.amount, 0);
-    const byCategory = new Map<string, number>();
+    const byCategory = new Map<string | null, number>();
     for (const e of expenses) {
-        const k = catName(e.category_id);
-        byCategory.set(k, (byCategory.get(k) ?? 0) + e.amount);
+        byCategory.set(
+            e.category_id,
+            (byCategory.get(e.category_id) ?? 0) + e.amount,
+        );
     }
 
     // ---------- filtering the list ----------
@@ -90,7 +112,7 @@ export default function Tracker() {
     const filtersActive =
         !!q || !!filterCat || Number.isFinite(min) || Number.isFinite(max);
 
-    const source = allMonths ? (allRows ?? []) : expenses;
+    const source: Expense[] = allMonths ? (allRows ?? []) : expenses;
     const visible = source.filter((e) => {
         if (
             q &&
@@ -110,6 +132,18 @@ export default function Tracker() {
     const visibleTotal = visible.reduce((s, e) => s + e.amount, 0);
     const shown = visible.slice(0, LIST_LIMIT);
 
+    // group the list by day
+    const groups: { date: string; rows: Expense[]; total: number }[] = [];
+    for (const e of shown) {
+        const last = groups[groups.length - 1];
+        if (last && last.date === e.spent_on) {
+            last.rows.push(e);
+            last.total += e.amount;
+        } else {
+            groups.push({ date: e.spent_on, rows: [e], total: e.amount });
+        }
+    }
+
     function clearFilters() {
         setSearch("");
         setFilterCat("");
@@ -117,277 +151,214 @@ export default function Tracker() {
         setMaxAmt("");
     }
 
-    // ---------- add / edit / delete ----------
-    async function submit() {
-        const value = parseFloat(amount);
-        if (!Number.isFinite(value) || value <= 0) return;
-        await addExpense({
-            amount: value,
-            note,
-            category_id: categoryId || null,
-        });
-        setAmount("");
-        setNote("");
-    }
-
-    function startEdit(e: Expense) {
-        setEditingId(e.id);
-        setDraft({
-            amount: String(e.amount),
-            note: e.note,
-            category_id: e.category_id ?? "",
-            spent_on: e.spent_on,
-        });
-    }
-
-    async function saveEdit() {
-        if (!editingId) return;
-        const value = parseFloat(draft.amount);
-        if (!Number.isFinite(value) || value <= 0 || !draft.spent_on) return;
-        await updateExpense(editingId, {
-            amount: Math.round(value * 100) / 100,
-            note: draft.note,
-            category_id: draft.category_id || null,
-            spent_on: draft.spent_on,
-        });
-        setEditingId(null);
-    }
-
-    async function remove(id: string) {
-        if (window.confirm("Delete this expense?")) await deleteExpense(id);
-    }
-
     return (
-        <main
-            style={{
-                maxWidth: 480,
-                margin: "0 auto",
-                padding: 16,
-                fontFamily: "system-ui",
-            }}
-        >
-            <h1>Expenses</h1>
-
-            <input
-                type="month"
-                value={month}
-                onChange={(e) => setMonth(e.target.value)}
-            />
-            <h2>Total: {total.toFixed(2)}</h2>
-            <ul>
-                {[...byCategory].map(([name, sum]) => (
-                    <li key={name}>
-                        {name}: {sum.toFixed(2)}
-                    </li>
-                ))}
-            </ul>
-
-            <Budgets expenses={expenses} categories={categories} />
-
-            <Charts
-                month={month}
-                expenses={expenses}
-                catName={catName}
-                catColor={catColor}
-            />
-
-            <Yearly />
-
-            <h3>Add expense</h3>
-            <div style={{ display: "grid", gap: 8 }}>
-                <input
-                    inputMode="decimal"
-                    placeholder="Amount"
-                    value={amount}
-                    onChange={(e) => setAmount(e.target.value)}
-                />
-                <input
-                    placeholder="Note"
-                    value={note}
-                    onChange={(e) => setNote(e.target.value)}
-                />
-                <select
-                    value={categoryId}
-                    onChange={(e) => setCategoryId(e.target.value)}
+        <main className="container">
+            <div className="monthnav">
+                <button
+                    onClick={() => setMonth(shiftMonth(month, -1))}
+                    aria-label="Previous month"
                 >
-                    <option value="">Uncategorized</option>
-                    {categories.map((c) => (
-                        <option key={c.id} value={c.id}>
-                            {c.name}
-                        </option>
-                    ))}
-                </select>
-                <button onClick={submit}>Add</button>
+                    ‹
+                </button>
+                <span className="label">{monthLabel(month)}</span>
+                <button
+                    onClick={() => setMonth(shiftMonth(month, 1))}
+                    aria-label="Next month"
+                >
+                    ›
+                </button>
             </div>
 
-            <Categories />
-            <Recurring />
-            <DataTools />
+            <section className="card summary">
+                <div className="muted small">Spent this month</div>
+                <div className="big">{fmt(total)}</div>
+                <div className="chips">
+                    {[...byCategory]
+                        .sort((a, b) => b[1] - a[1])
+                        .map(([id, sum]) => (
+                            <span className="chip static" key={id ?? "none"}>
+                                <i
+                                    className="swatch"
+                                    style={{
+                                        background: catColor(id) ?? "#9ca3af",
+                                    }}
+                                />
+                                {catName(id)} {fmt(sum)}
+                            </span>
+                        ))}
+                </div>
+                {expenses.length === 0 && (
+                    <p className="muted small" style={{ margin: 0 }}>
+                        Nothing here yet. Tap + to add an expense.
+                    </p>
+                )}
+            </section>
 
-            <h3>{allMonths ? "All months" : "This month"}</h3>
+            <div className="card">
+                <Budgets expenses={expenses} categories={categories} />
+            </div>
+            <div className="card">
+                <Charts
+                    month={month}
+                    expenses={expenses}
+                    catName={catName}
+                    catColor={catColor}
+                />
+            </div>
 
-            <div style={{ display: "grid", gap: 6, marginBottom: 12 }}>
+            {/* ---------- search + list ---------- */}
+            <div className="searchbar">
                 <input
                     type="search"
                     placeholder="Search notes or categories"
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
                 />
-                <div style={{ display: "flex", gap: 6 }}>
-                    <select
-                        value={filterCat}
-                        onChange={(e) => setFilterCat(e.target.value)}
-                        style={{ flex: 1, minWidth: 0 }}
-                    >
-                        <option value="">All categories</option>
-                        <option value="none">Uncategorized</option>
-                        {categories.map((c) => (
-                            <option key={c.id} value={c.id}>
-                                {c.name}
-                            </option>
-                        ))}
-                    </select>
-                    <input
-                        inputMode="decimal"
-                        placeholder="Min"
-                        value={minAmt}
-                        style={{ width: 70 }}
-                        onChange={(e) => setMinAmt(e.target.value)}
-                    />
-                    <input
-                        inputMode="decimal"
-                        placeholder="Max"
-                        value={maxAmt}
-                        style={{ width: 70 }}
-                        onChange={(e) => setMaxAmt(e.target.value)}
-                    />
-                </div>
-                <label
-                    style={{ display: "flex", gap: 6, alignItems: "center" }}
+                <button
+                    className={
+                        filtersOpen || filtersActive || allMonths
+                            ? "active"
+                            : ""
+                    }
+                    onClick={() => setFiltersOpen(!filtersOpen)}
                 >
-                    <input
-                        type="checkbox"
-                        checked={allMonths}
-                        onChange={(e) => setAllMonths(e.target.checked)}
-                    />
-                    Search all months
-                </label>
-                {(filtersActive || allMonths) && (
-                    <div
+                    Filters
+                </button>
+            </div>
+
+            {filtersOpen && (
+                <div className="card filters">
+                    <div className="frow">
+                        <select
+                            value={filterCat}
+                            onChange={(e) => setFilterCat(e.target.value)}
+                            style={{ flex: 1 }}
+                        >
+                            <option value="">All categories</option>
+                            <option value="none">Uncategorized</option>
+                            {categories.map((c) => (
+                                <option key={c.id} value={c.id}>
+                                    {c.name}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+                    <div className="frow">
+                        <input
+                            inputMode="decimal"
+                            placeholder="Min amount"
+                            value={minAmt}
+                            style={{ flex: 1 }}
+                            onChange={(e) => setMinAmt(e.target.value)}
+                        />
+                        <input
+                            inputMode="decimal"
+                            placeholder="Max amount"
+                            value={maxAmt}
+                            style={{ flex: 1 }}
+                            onChange={(e) => setMaxAmt(e.target.value)}
+                        />
+                    </div>
+                    <label
                         style={{
                             display: "flex",
                             gap: 8,
                             alignItems: "center",
                         }}
                     >
-                        <small>
-                            {visible.length} expense
-                            {visible.length === 1 ? "" : "s"} ·{" "}
-                            {visibleTotal.toFixed(2)}
-                        </small>
-                        {filtersActive && (
-                            <button onClick={clearFilters}>
-                                Clear filters
-                            </button>
-                        )}
+                        <input
+                            type="checkbox"
+                            checked={allMonths}
+                            onChange={(e) => setAllMonths(e.target.checked)}
+                        />
+                        Search all months
+                    </label>
+                    {filtersActive && (
+                        <button onClick={clearFilters}>Clear filters</button>
+                    )}
+                </div>
+            )}
+
+            {(filtersActive || allMonths) && (
+                <p className="muted small" style={{ margin: "10px 4px 0" }}>
+                    {visible.length} expense{visible.length === 1 ? "" : "s"} ·{" "}
+                    {fmt(visibleTotal)}
+                    {allMonths ? " · all months" : ""}
+                </p>
+            )}
+
+            {groups.length === 0 && (
+                <p className="muted center" style={{ marginTop: 24 }}>
+                    {filtersActive ? "No matches." : "No expenses to show."}
+                </p>
+            )}
+
+            {groups.map((g) => (
+                <div className="daygroup" key={g.date}>
+                    <div className="dayhead">
+                        <span>{dayLabel(g.date)}</span>
+                        <span>{fmt(g.total)}</span>
                     </div>
-                )}
-            </div>
-
-            {shown.length === 0 && <p>No expenses to show.</p>}
-
-            <ul
-                style={{
-                    listStyle: "none",
-                    padding: 0,
-                    display: "grid",
-                    gap: 12,
-                }}
-            >
-                {shown.map((e) =>
-                    editingId === e.id ? (
-                        <li
-                            key={e.id}
-                            style={{
-                                display: "grid",
-                                gap: 6,
-                                padding: 8,
-                                border: "1px solid #888",
-                                borderRadius: 8,
-                            }}
-                        >
-                            <input
-                                inputMode="decimal"
-                                value={draft.amount}
-                                onChange={(ev) =>
-                                    setDraft({
-                                        ...draft,
-                                        amount: ev.target.value,
-                                    })
-                                }
-                            />
-                            <input
-                                value={draft.note}
-                                placeholder="Note"
-                                onChange={(ev) =>
-                                    setDraft({
-                                        ...draft,
-                                        note: ev.target.value,
-                                    })
-                                }
-                            />
-                            <select
-                                value={draft.category_id}
-                                onChange={(ev) =>
-                                    setDraft({
-                                        ...draft,
-                                        category_id: ev.target.value,
-                                    })
-                                }
+                    <div className="rows">
+                        {g.rows.map((e) => (
+                            <button
+                                className="row"
+                                key={e.id}
+                                onClick={() => setSheet({ editing: e })}
                             >
-                                <option value="">Uncategorized</option>
-                                {categories.map((c) => (
-                                    <option key={c.id} value={c.id}>
-                                        {c.name}
-                                    </option>
-                                ))}
-                            </select>
-                            <input
-                                type="date"
-                                value={draft.spent_on}
-                                onChange={(ev) =>
-                                    setDraft({
-                                        ...draft,
-                                        spent_on: ev.target.value,
-                                    })
-                                }
-                            />
-                            <div style={{ display: "flex", gap: 8 }}>
-                                <button onClick={saveEdit}>Save</button>
-                                <button onClick={() => setEditingId(null)}>
-                                    Cancel
-                                </button>
-                            </div>
-                        </li>
-                    ) : (
-                        <li key={e.id}>
-                            {e.spent_on} · {e.amount.toFixed(2)} ·{" "}
-                            {catName(e.category_id)}
-                            {e.note && ` · ${e.note}`}{" "}
-                            <button onClick={() => startEdit(e)}>✎</button>{" "}
-                            <button onClick={() => remove(e.id)}>✕</button>
-                        </li>
-                    ),
-                )}
-            </ul>
+                                <i
+                                    className="swatch big"
+                                    style={{
+                                        background:
+                                            catColor(e.category_id) ??
+                                            "#9ca3af",
+                                    }}
+                                />
+                                <span className="row-main">
+                                    <span className="row-title">
+                                        {e.note || catName(e.category_id)}
+                                    </span>
+                                    {e.note && (
+                                        <span className="muted small">
+                                            {catName(e.category_id)}
+                                        </span>
+                                    )}
+                                </span>
+                                <span className="row-amt">{fmt(e.amount)}</span>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            ))}
 
             {visible.length > LIST_LIMIT && (
-                <p>
-                    <small>
-                        Showing the newest {LIST_LIMIT} of {visible.length}.
-                        Narrow the search to see the rest.
-                    </small>
+                <p className="muted small center">
+                    Showing the newest {LIST_LIMIT} of {visible.length}. Narrow
+                    the search to see the rest.
                 </p>
+            )}
+
+            {/* ---------- tools ---------- */}
+            <h3 style={{ marginTop: 28 }}>Tools</h3>
+            <Yearly />
+            <Recurring />
+            <Categories />
+            <DataTools />
+
+            {/* ---------- quick add ---------- */}
+            <button
+                className="fab"
+                aria-label="Add expense"
+                onClick={() => setSheet({ editing: null })}
+            >
+                +
+            </button>
+
+            {sheet && (
+                <ExpenseSheet
+                    editing={sheet.editing}
+                    onClose={() => setSheet(null)}
+                />
             )}
         </main>
     );

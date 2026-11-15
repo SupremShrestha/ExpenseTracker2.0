@@ -1,5 +1,6 @@
 import { useEffect, useSyncExternalStore } from "react";
 import { useAuth } from "./useAuth";
+import { useTheme } from "./useTheme";
 import { supabase } from "./supabase";
 import {
     startSync,
@@ -17,10 +18,12 @@ const LABEL = {
     offline: "Offline",
     error: "Sync error",
 };
+const THEME_LABEL = { system: "◐ Auto", light: "☀ Light", dark: "☾ Dark" };
 
 export default function App() {
     const { loading, signedIn, session } = useAuth();
     const status = useSyncExternalStore(subscribeStatus, getStatus);
+    const { theme, cycle } = useTheme();
     const userId = session?.user.id;
 
     useEffect(() => {
@@ -34,28 +37,45 @@ export default function App() {
         };
     }, [userId]);
 
-    if (loading) return <p style={{ padding: 16 }}>Loading…</p>;
+    if (loading)
+        return (
+            <p className="muted center" style={{ marginTop: 80 }}>
+                Loading…
+            </p>
+        );
     if (!signedIn) return <Login />;
 
     return (
         <>
-            <div
-                style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    gap: 8,
-                    padding: "8px 16px",
-                    fontFamily: "system-ui",
-                }}
-            >
-                <small>{session?.user.email ?? "Offline"}</small>
-                <small title={status === "error" ? getError() : ""}>
-                    {LABEL[status]} <button onClick={syncNow}>↻</button>
-                </small>
-                <button onClick={() => supabase.auth.signOut()}>
-                    Sign out
-                </button>
-            </div>
+            <header className="topbar">
+                <div className="topbar-inner">
+                    <span className="brand">Expenses</span>
+                    <div className="topbar-actions">
+                        <button
+                            className="pill"
+                            onClick={syncNow}
+                            title={
+                                status === "error"
+                                    ? getError()
+                                    : "Tap to sync now"
+                            }
+                        >
+                            <span className={`dot dot-${status}`} />
+                            {LABEL[status]}
+                        </button>
+                        <button className="ghost" onClick={cycle}>
+                            {THEME_LABEL[theme]}
+                        </button>
+                        <button
+                            className="ghost"
+                            title={session?.user.email ?? "Offline"}
+                            onClick={() => supabase.auth.signOut()}
+                        >
+                            Sign out
+                        </button>
+                    </div>
+                </div>
+            </header>
             <Tracker />
         </>
     );

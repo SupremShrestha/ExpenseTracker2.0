@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { FormEvent } from "react";
 import { supabase } from "./supabase";
 
 export default function Login() {
@@ -8,7 +9,8 @@ export default function Login() {
     const [msg, setMsg] = useState("");
     const [busy, setBusy] = useState(false);
 
-    async function submit() {
+    async function submit(e: FormEvent) {
+        e.preventDefault();
         setBusy(true);
         setMsg("");
         const creds = { email, password };
@@ -28,41 +30,52 @@ export default function Login() {
     }
 
     return (
-        <main
-            style={{
-                maxWidth: 360,
-                margin: "80px auto",
-                padding: 16,
-                fontFamily: "system-ui",
-            }}
-        >
-            <h1>{mode === "signin" ? "Sign in" : "Create account"}</h1>
-            <div style={{ display: "grid", gap: 8 }}>
-                <input
-                    type="email"
-                    placeholder="Email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                />
-                <input
-                    type="password"
-                    placeholder="Password (min 6 chars)"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                />
-                <button onClick={submit} disabled={busy}>
-                    {mode === "signin" ? "Sign in" : "Sign up"}
-                </button>
-                {msg && <p style={{ color: "crimson" }}>{msg}</p>}
-                <button
-                    onClick={() =>
-                        setMode(mode === "signin" ? "signup" : "signin")
-                    }
-                >
+        <main className="auth">
+            <div className="card auth-card">
+                <h1>Expense Tracker</h1>
+                <p className="muted">
                     {mode === "signin"
-                        ? "Need an account? Sign up"
-                        : "Have an account? Sign in"}
-                </button>
+                        ? "Sign in to sync your data."
+                        : "Create an account to get started."}
+                </p>
+                <form onSubmit={submit}>
+                    <input
+                        type="email"
+                        placeholder="Email"
+                        autoComplete="email"
+                        required
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                    />
+                    <input
+                        type="password"
+                        placeholder="Password (min 6 characters)"
+                        autoComplete={
+                            mode === "signin"
+                                ? "current-password"
+                                : "new-password"
+                        }
+                        minLength={6}
+                        required
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                    />
+                    <button className="primary" disabled={busy}>
+                        {mode === "signin" ? "Sign in" : "Sign up"}
+                    </button>
+                    {msg && <p className="error">{msg}</p>}
+                    <button
+                        type="button"
+                        className="link"
+                        onClick={() =>
+                            setMode(mode === "signin" ? "signup" : "signin")
+                        }
+                    >
+                        {mode === "signin"
+                            ? "Need an account? Sign up"
+                            : "Have an account? Sign in"}
+                    </button>
+                </form>
             </div>
         </main>
     );
