@@ -13,12 +13,22 @@ import Budgets from "./Budgets";
 import Categories from "./Categories";
 import Recurring from "./Recurring";
 import DataTools from "./DataTools";
+import Yearly from "./Yearly";
+
+const LIST_LIMIT = 200;
 
 export default function Tracker() {
     const [month, setMonth] = useState(() => today().slice(0, 7)); // 'YYYY-MM'
     const [amount, setAmount] = useState("");
     const [note, setNote] = useState("");
     const [categoryId, setCategoryId] = useState("");
+
+    // search / filter state (these only affect the list at the bottom)
+    const [search, setSearch] = useState("");
+    const [filterCat, setFilterCat] = useState(""); // '' = all, 'none' = uncategorized, else id
+    const [minAmt, setMinAmt] = useState("");
+    const [maxAmt, setMaxAmt] = useState("");
+    const [allMonths, setAllMonths] = useState(false);
 
     // editing state
     const [editingId, setEditingId] = useState<string | null>(null);
@@ -35,6 +45,7 @@ export default function Tracker() {
             [],
         ) ?? [];
 
+    // The selected month: used for totals, budgets and charts
     const expenses =
         useLiveQuery(
             () =>
@@ -46,6 +57,19 @@ export default function Tracker() {
                     .then((rows) => rows.reverse()),
             [month],
         ) ?? [];
+
+    // Every expense, newest first: only loaded when "all months" is ticked
+    const allRows = useLiveQuery(
+        () =>
+            allMonths
+                ? db.expenses
+                      .orderBy("spent_on")
+                      .reverse()
+                      .filter((e) => !e.deleted_at)
+                      .toArray()
+                : Promise.resolve([] as Expense[]),
+        [allMonths],
+    );
 
     const catName = (id: string | null) =>
         categories.find((c) => c.id === id)?.name ?? "Uncategorized";
@@ -59,6 +83,41 @@ export default function Tracker() {
         byCategory.set(k, (byCategory.get(k) ?? 0) + e.amount);
     }
 
+    // ---------- filtering the list ----------
+    const q = search.trim().toLowerCase();
+    const min = parseFloat(minAmt);
+    const max = parseFloat(maxAmt);
+    const filtersActive =
+        !!q || !!filterCat || Number.isFinite(min) || Number.isFinite(max);
+
+    const source = allMonths ? (allRows ?? []) : expenses;
+    const visible = source.filter((e) => {
+        if (
+            q &&
+            !(
+                e.note.toLowerCase().includes(q) ||
+                catName(e.category_id).toLowerCase().includes(q)
+            )
+        )
+            return false;
+        if (filterCat === "none" && e.category_id !== null) return false;
+        if (filterCat && filterCat !== "none" && e.category_id !== filterCat)
+            return false;
+        if (Number.isFinite(min) && e.amount < min) return false;
+        if (Number.isFinite(max) && e.amount > max) return false;
+        return true;
+    });
+    const visibleTotal = visible.reduce((s, e) => s + e.amount, 0);
+    const shown = visible.slice(0, LIST_LIMIT);
+
+    function clearFilters() {
+        setSearch("");
+        setFilterCat("");
+        setMinAmt("");
+        setMaxAmt("");
+    }
+
+    // ---------- add / edit / delete ----------
     async function submit() {
         const value = parseFloat(amount);
         if (!Number.isFinite(value) || value <= 0) return;
@@ -132,6 +191,8 @@ export default function Tracker() {
                 catColor={catColor}
             />
 
+            <Yearly />
+
             <h3>Add expense</h3>
             <div style={{ display: "grid", gap: 8 }}>
                 <input
@@ -163,7 +224,78 @@ export default function Tracker() {
             <Recurring />
             <DataTools />
 
-            <h3>This month</h3>
+            <h3>{allMonths ? "All months" : "This month"}</h3>
+
+            <div style={{ display: "grid", gap: 6, marginBottom: 12 }}>
+                <input
+                    type="search"
+                    placeholder="Search notes or categories"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                />
+                <div style={{ display: "flex", gap: 6 }}>
+                    <select
+                        value={filterCat}
+                        onChange={(e) => setFilterCat(e.target.value)}
+                        style={{ flex: 1, minWidth: 0 }}
+                    >
+                        <option value="">All categories</option>
+                        <option value="none">Uncategorized</option>
+                        {categories.map((c) => (
+                            <option key={c.id} value={c.id}>
+                                {c.name}
+                            </option>
+                        ))}
+                    </select>
+                    <input
+                        inputMode="decimal"
+                        placeholder="Min"
+                        value={minAmt}
+                        style={{ width: 70 }}
+                        onChange={(e) => setMinAmt(e.target.value)}
+                    />
+                    <input
+                        inputMode="decimal"
+                        placeholder="Max"
+                        value={maxAmt}
+                        style={{ width: 70 }}
+                        onChange={(e) => setMaxAmt(e.target.value)}
+                    />
+                </div>
+                <label
+                    style={{ display: "flex", gap: 6, alignItems: "center" }}
+                >
+                    <input
+                        type="checkbox"
+                        checked={allMonths}
+                        onChange={(e) => setAllMonths(e.target.checked)}
+                    />
+                    Search all months
+                </label>
+                {(filtersActive || allMonths) && (
+                    <div
+                        style={{
+                            display: "flex",
+                            gap: 8,
+                            alignItems: "center",
+                        }}
+                    >
+                        <small>
+                            {visible.length} expense
+                            {visible.length === 1 ? "" : "s"} ·{" "}
+                            {visibleTotal.toFixed(2)}
+                        </small>
+                        {filtersActive && (
+                            <button onClick={clearFilters}>
+                                Clear filters
+                            </button>
+                        )}
+                    </div>
+                )}
+            </div>
+
+            {shown.length === 0 && <p>No expenses to show.</p>}
+
             <ul
                 style={{
                     listStyle: "none",
@@ -172,7 +304,7 @@ export default function Tracker() {
                     gap: 12,
                 }}
             >
-                {expenses.map((e) =>
+                {shown.map((e) =>
                     editingId === e.id ? (
                         <li
                             key={e.id}
@@ -248,6 +380,15 @@ export default function Tracker() {
                     ),
                 )}
             </ul>
+
+            {visible.length > LIST_LIMIT && (
+                <p>
+                    <small>
+                        Showing the newest {LIST_LIMIT} of {visible.length}.
+                        Narrow the search to see the rest.
+                    </small>
+                </p>
+            )}
         </main>
     );
 }
