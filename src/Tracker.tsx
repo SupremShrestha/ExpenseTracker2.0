@@ -1,6 +1,15 @@
 import { useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { db, addExpense, addCategory, deleteExpense, today } from "./db";
+import {
+    db,
+    addExpense,
+    addCategory,
+    updateExpense,
+    deleteExpense,
+    today,
+    type Expense,
+} from "./db";
+import Charts from './Charts';
 
 export default function Tracker() {
     const [month, setMonth] = useState(() => today().slice(0, 7)); // 'YYYY-MM'
@@ -8,6 +17,15 @@ export default function Tracker() {
     const [note, setNote] = useState("");
     const [categoryId, setCategoryId] = useState("");
     const [newCat, setNewCat] = useState("");
+
+    // editing state
+    const [editingId, setEditingId] = useState<string | null>(null);
+    const [draft, setDraft] = useState({
+        amount: "",
+        note: "",
+        category_id: "",
+        spent_on: "",
+    });
 
     const categories =
         useLiveQuery(
@@ -20,7 +38,7 @@ export default function Tracker() {
             () =>
                 db.expenses
                     .where("spent_on")
-                    .between(`${month}-01`, `${month}-32`) // upper bound is exclusive; '-32' safely covers the month
+                    .between(`${month}-01`, `${month}-32`)
                     .filter((e) => !e.deleted_at)
                     .sortBy("spent_on")
                     .then((rows) => rows.reverse()),
@@ -49,6 +67,33 @@ export default function Tracker() {
         setNote("");
     }
 
+    function startEdit(e: Expense) {
+        setEditingId(e.id);
+        setDraft({
+            amount: String(e.amount),
+            note: e.note,
+            category_id: e.category_id ?? "",
+            spent_on: e.spent_on,
+        });
+    }
+
+    async function saveEdit() {
+        if (!editingId) return;
+        const value = parseFloat(draft.amount);
+        if (!Number.isFinite(value) || value <= 0 || !draft.spent_on) return;
+        await updateExpense(editingId, {
+            amount: Math.round(value * 100) / 100,
+            note: draft.note,
+            category_id: draft.category_id || null,
+            spent_on: draft.spent_on,
+        });
+        setEditingId(null);
+    }
+
+    async function remove(id: string) {
+        if (window.confirm("Delete this expense?")) await deleteExpense(id);
+    }
+
     return (
         <main
             style={{
@@ -73,6 +118,7 @@ export default function Tracker() {
                     </li>
                 ))}
             </ul>
+            <Charts month={month} expenses={expenses} catName={catName} />
 
             <h3>Add expense</h3>
             <div style={{ display: "grid", gap: 8 }}>
@@ -119,14 +165,89 @@ export default function Tracker() {
             </button>
 
             <h3>This month</h3>
-            <ul>
-                {expenses.map((e) => (
-                    <li key={e.id}>
-                        {e.spent_on} · {e.amount.toFixed(2)} ·{" "}
-                        {catName(e.category_id)} {e.note && `· ${e.note}`}{" "}
-                        <button onClick={() => deleteExpense(e.id)}>✕</button>
-                    </li>
-                ))}
+            <ul
+                style={{
+                    listStyle: "none",
+                    padding: 0,
+                    display: "grid",
+                    gap: 12,
+                }}
+            >
+                {expenses.map((e) =>
+                    editingId === e.id ? (
+                        <li
+                            key={e.id}
+                            style={{
+                                display: "grid",
+                                gap: 6,
+                                padding: 8,
+                                border: "1px solid #888",
+                                borderRadius: 8,
+                            }}
+                        >
+                            <input
+                                inputMode="decimal"
+                                value={draft.amount}
+                                onChange={(ev) =>
+                                    setDraft({
+                                        ...draft,
+                                        amount: ev.target.value,
+                                    })
+                                }
+                            />
+                            <input
+                                value={draft.note}
+                                placeholder="Note"
+                                onChange={(ev) =>
+                                    setDraft({
+                                        ...draft,
+                                        note: ev.target.value,
+                                    })
+                                }
+                            />
+                            <select
+                                value={draft.category_id}
+                                onChange={(ev) =>
+                                    setDraft({
+                                        ...draft,
+                                        category_id: ev.target.value,
+                                    })
+                                }
+                            >
+                                <option value="">Uncategorized</option>
+                                {categories.map((c) => (
+                                    <option key={c.id} value={c.id}>
+                                        {c.name}
+                                    </option>
+                                ))}
+                            </select>
+                            <input
+                                type="date"
+                                value={draft.spent_on}
+                                onChange={(ev) =>
+                                    setDraft({
+                                        ...draft,
+                                        spent_on: ev.target.value,
+                                    })
+                                }
+                            />
+                            <div style={{ display: "flex", gap: 8 }}>
+                                <button onClick={saveEdit}>Save</button>
+                                <button onClick={() => setEditingId(null)}>
+                                    Cancel
+                                </button>
+                            </div>
+                        </li>
+                    ) : (
+                        <li key={e.id}>
+                            {e.spent_on} · {e.amount.toFixed(2)} ·{" "}
+                            {catName(e.category_id)}
+                            {e.note && ` · ${e.note}`}{" "}
+                            <button onClick={() => startEdit(e)}>✎</button>{" "}
+                            <button onClick={() => remove(e.id)}>✕</button>
+                        </li>
+                    ),
+                )}
             </ul>
         </main>
     );
