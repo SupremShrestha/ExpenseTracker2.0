@@ -11,6 +11,8 @@ import {
 import Charts from "./Charts";
 import Budgets from "./Budgets";
 import Categories from "./Categories";
+import Recurring from "./Recurring";
+import DataTools from "./DataTools";
 
 export default function Tracker() {
     const [month, setMonth] = useState(() => today().slice(0, 7)); // 'YYYY-MM'
@@ -158,6 +160,8 @@ export default function Tracker() {
             </div>
 
             <Categories />
+            <Recurring />
+            <DataTools />
 
             <h3>This month</h3>
             <ul
