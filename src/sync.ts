@@ -1,6 +1,7 @@
 import { liveQuery, type Table } from 'dexie';
 import { supabase } from './supabase';
 import { db } from './db';
+import { generateRecurring } from './recurringLogic';
 
 // ---------- status (read by the UI) ----------
 type Status = 'idle' | 'syncing' | 'offline' | 'error';
@@ -20,12 +21,18 @@ export const getStatus = () => status;
 export const getError = () => lastError;
 
 // ---------- what to sync ----------
-// Order matters: categories first, because expenses reference them.
+// Order matters: categories first, because the others reference them.
 const TABLES = [
     {
         name: 'categories',
         table: db.categories as unknown as Table<any, string>,
         cols: ['id', 'name', 'color', 'budget', 'created_at', 'updated_at', 'deleted_at'],
+    },
+    {
+        name: 'recurring',
+        table: db.recurring as unknown as Table<any, string>,
+        cols: ['id', 'category_id', 'amount', 'note', 'day_of_month', 'starts_on',
+            'created_at', 'updated_at', 'deleted_at'],
     },
     {
         name: 'expenses',
@@ -108,6 +115,9 @@ export async function syncNow() {
             for (const t of TABLES) await pull(t);
         } while (again);
         setStatus('idle');
+        // Runs only right after a successful sync, so this device already has the
+        // latest data. New entries are dirty, which triggers another sync by itself.
+        await generateRecurring().catch(() => { });
     } catch (e: any) {
         setStatus('error', e?.message ?? String(e));
     } finally {
@@ -121,9 +131,10 @@ export async function startSync(userId: string) {
     // the previous account's rows never get uploaded into this one.
     const owner = await db.meta.get('user_id');
     if (owner && owner.value !== userId) {
-        await db.transaction('rw', db.expenses, db.categories, db.meta, async () => {
+        await db.transaction('rw', db.expenses, db.categories, db.recurring, db.meta, async () => {
             await db.expenses.clear();
             await db.categories.clear();
+            await db.recurring.clear();
             await db.meta.clear();
         });
     }
@@ -138,7 +149,8 @@ export async function startSync(userId: string) {
     const sub = liveQuery(
         async () =>
             (await db.expenses.where('dirty').equals(1).count()) +
-            (await db.categories.where('dirty').equals(1).count())
+            (await db.categories.where('dirty').equals(1).count()) +
+            (await db.recurring.where('dirty').equals(1).count())
     ).subscribe((n) => { if (n > 0) schedule(); });
 
     const onOnline = () => syncNow();

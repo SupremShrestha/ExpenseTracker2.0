@@ -9,7 +9,7 @@ import {
     ResponsiveContainer,
     CartesianGrid,
 } from "recharts";
-import { db, today } from "./db";
+import { db, today, type Expense } from "./db";
 
 const MONTHS = [
     "Jan",
@@ -39,7 +39,7 @@ export default function Yearly() {
         ) ?? [];
 
     // Only loads data while the section is open
-    const expenses =
+    const expenses: Expense[] =
         useLiveQuery(
             () =>
                 open
@@ -48,7 +48,7 @@ export default function Yearly() {
                           .between(`${year}-01-01`, `${year + 1}-01-01`)
                           .filter((e) => !e.deleted_at)
                           .toArray()
-                    : Promise.resolve([]),
+                    : Promise.resolve([] as Expense[]),
             [year, open],
         ) ?? [];
 
