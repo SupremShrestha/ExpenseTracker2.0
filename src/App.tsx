@@ -10,6 +10,7 @@ import {
     getError,
 } from "./sync";
 import Login from "./Login";
+import ResetPassword from "./ResetPassword";
 import Tracker from "./Tracker";
 
 const LABEL = {
@@ -21,7 +22,8 @@ const LABEL = {
 const THEME_LABEL = { system: "◐ Auto", light: "☀ Light", dark: "☾ Dark" };
 
 export default function App() {
-    const { loading, signedIn, session } = useAuth();
+    const { loading, signedIn, session, recovering, finishRecovery } =
+        useAuth();
     const status = useSyncExternalStore(subscribeStatus, getStatus);
     const { theme, cycle } = useTheme();
     const userId = session?.user.id;
@@ -43,6 +45,7 @@ export default function App() {
                 Loading…
             </p>
         );
+    if (recovering) return <ResetPassword onDone={finishRecovery} />;
     if (!signedIn) return <Login />;
 
     return (

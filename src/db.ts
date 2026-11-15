@@ -155,6 +155,21 @@ export async function addRecurring(input: {
   });
 }
 
+// Changes apply to entries created from now on. Entries already created stay as they are.
+export async function updateRecurring(
+  id: string,
+  patch: Partial<
+    Pick<Recurring, 'amount' | 'note' | 'category_id' | 'day_of_month' | 'starts_on'>
+  >
+) {
+  await db.transaction('rw', db.recurring, db.meta, async () => {
+    await db.recurring.update(id, { ...patch, updated_at: now(), dirty: 1 });
+    // If the start date moved, re-scan from it next time. This can't create
+    // duplicates, because every entry has a fixed ID per rule and month.
+    if (patch.starts_on !== undefined) await db.meta.delete(`rec-last:${id}`);
+  });
+}
+
 // Stops future entries. Entries already created stay.
 export async function deleteRecurring(id: string) {
   const t = now();
