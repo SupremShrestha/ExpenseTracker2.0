@@ -3,20 +3,20 @@ import { useLiveQuery } from "dexie-react-hooks";
 import {
     db,
     addExpense,
-    addCategory,
     updateExpense,
     deleteExpense,
     today,
     type Expense,
 } from "./db";
-import Charts from './Charts';
+import Charts from "./Charts";
+import Budgets from "./Budgets";
+import Categories from "./Categories";
 
 export default function Tracker() {
     const [month, setMonth] = useState(() => today().slice(0, 7)); // 'YYYY-MM'
     const [amount, setAmount] = useState("");
     const [note, setNote] = useState("");
     const [categoryId, setCategoryId] = useState("");
-    const [newCat, setNewCat] = useState("");
 
     // editing state
     const [editingId, setEditingId] = useState<string | null>(null);
@@ -29,7 +29,7 @@ export default function Tracker() {
 
     const categories =
         useLiveQuery(
-            () => db.categories.filter((c) => !c.deleted_at).toArray(),
+            () => db.categories.filter((c) => !c.deleted_at).sortBy("name"),
             [],
         ) ?? [];
 
@@ -47,6 +47,8 @@ export default function Tracker() {
 
     const catName = (id: string | null) =>
         categories.find((c) => c.id === id)?.name ?? "Uncategorized";
+    const catColor = (id: string | null) =>
+        categories.find((c) => c.id === id)?.color ?? null;
 
     const total = expenses.reduce((s, e) => s + e.amount, 0);
     const byCategory = new Map<string, number>();
@@ -118,7 +120,15 @@ export default function Tracker() {
                     </li>
                 ))}
             </ul>
-            <Charts month={month} expenses={expenses} catName={catName} />
+
+            <Budgets expenses={expenses} categories={categories} />
+
+            <Charts
+                month={month}
+                expenses={expenses}
+                catName={catName}
+                catColor={catColor}
+            />
 
             <h3>Add expense</h3>
             <div style={{ display: "grid", gap: 8 }}>
@@ -147,22 +157,7 @@ export default function Tracker() {
                 <button onClick={submit}>Add</button>
             </div>
 
-            <h3>Add category</h3>
-            <input
-                placeholder="e.g. Food"
-                value={newCat}
-                onChange={(e) => setNewCat(e.target.value)}
-            />
-            <button
-                onClick={async () => {
-                    if (newCat.trim()) {
-                        await addCategory(newCat);
-                        setNewCat("");
-                    }
-                }}
-            >
-                Add
-            </button>
+            <Categories />
 
             <h3>This month</h3>
             <ul

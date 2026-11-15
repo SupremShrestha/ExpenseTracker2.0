@@ -25,7 +25,7 @@ const TABLES = [
     {
         name: 'categories',
         table: db.categories as unknown as Table<any, string>,
-        cols: ['id', 'name', 'color', 'created_at', 'updated_at', 'deleted_at'],
+        cols: ['id', 'name', 'color', 'budget', 'created_at', 'updated_at', 'deleted_at'],
     },
     {
         name: 'expenses',
@@ -41,7 +41,9 @@ async function push(t: Cfg) {
     const dirty = await t.table.where('dirty').equals(1).toArray();
     for (let i = 0; i < dirty.length; i += 200) {
         const chunk = dirty.slice(i, i + 200);
-        const payload = chunk.map((r) => Object.fromEntries(t.cols.map((c) => [c, r[c]])));
+        const payload = chunk.map((r) =>
+            Object.fromEntries(t.cols.map((c) => [c, r[c] ?? null]))
+        );
         const { error } = await supabase.from(t.name).upsert(payload, { onConflict: 'id' });
         if (error) throw error;
 

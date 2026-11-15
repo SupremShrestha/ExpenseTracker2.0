@@ -27,9 +27,10 @@ type Props = {
     month: string; // 'YYYY-MM'
     expenses: Expense[];
     catName: (id: string | null) => string;
+    catColor: (id: string | null) => string | null;
 };
 
-export default function Charts({ month, expenses, catName }: Props) {
+export default function Charts({ month, expenses, catName, catColor }: Props) {
     if (expenses.length === 0) return null;
 
     const [y, m] = month.split("-").map(Number);
@@ -38,17 +39,20 @@ export default function Charts({ month, expenses, catName }: Props) {
         day: i + 1,
         total: 0,
     }));
-    const cats = new Map<string, number>();
+    const cats = new Map<string | null, number>();
 
     for (const e of expenses) {
         const d = Number(e.spent_on.slice(8, 10));
         if (daily[d - 1]) daily[d - 1].total += e.amount;
-        const k = catName(e.category_id);
-        cats.set(k, (cats.get(k) ?? 0) + e.amount);
+        cats.set(e.category_id, (cats.get(e.category_id) ?? 0) + e.amount);
     }
 
     const byCat = [...cats]
-        .map(([name, total]) => ({ name, total: round(total) }))
+        .map(([id, total]) => ({
+            name: catName(id),
+            total: round(total),
+            color: catColor(id),
+        }))
         .sort((a, b) => b.total - a.total);
     const byDay = daily.map((d) => ({ ...d, total: round(d.total) }));
 
@@ -81,10 +85,10 @@ export default function Charts({ month, expenses, catName }: Props) {
                             contentStyle={{ color: "#111" }}
                         />
                         <Bar dataKey="total" radius={[0, 4, 4, 0]}>
-                            {byCat.map((_, i) => (
+                            {byCat.map((d, i) => (
                                 <Cell
                                     key={i}
-                                    fill={COLORS[i % COLORS.length]}
+                                    fill={d.color ?? COLORS[i % COLORS.length]}
                                 />
                             ))}
                         </Bar>

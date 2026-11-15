@@ -4,6 +4,7 @@ export interface Category {
   id: string;
   name: string;
   color: string | null;
+  budget: number | null; // monthly limit, null = no budget
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -25,7 +26,7 @@ export interface Expense {
 export const db = new Dexie('expense-tracker') as Dexie & {
   expenses: EntityTable<Expense, 'id'>;
   categories: EntityTable<Category, 'id'>;
-  meta: EntityTable<{ key: string; value: string }, 'key'>; // for last-sync timestamp later
+  meta: EntityTable<{ key: string; value: string }, 'key'>;
 };
 
 db.version(1).stores({
@@ -37,6 +38,7 @@ db.version(1).stores({
 const now = () => new Date().toISOString();
 export const today = () => new Date().toLocaleDateString('en-CA'); // local YYYY-MM-DD
 
+// ---------- expenses ----------
 export async function addExpense(input: {
   amount: number;
   note?: string;
@@ -70,15 +72,37 @@ export async function deleteExpense(id: string) {
   await db.expenses.update(id, { deleted_at: t, updated_at: t, dirty: 1 });
 }
 
+// ---------- categories ----------
 export async function addCategory(name: string, color: string | null = null) {
   const t = now();
   await db.categories.add({
     id: crypto.randomUUID(),
     name: name.trim(),
     color,
+    budget: null,
     created_at: t,
     updated_at: t,
     deleted_at: null,
     dirty: 1,
+  });
+}
+
+export async function updateCategory(
+  id: string,
+  patch: Partial<Pick<Category, 'name' | 'color' | 'budget'>>
+) {
+  await db.categories.update(id, { ...patch, updated_at: now(), dirty: 1 });
+}
+
+// Soft delete. Expenses in this category become Uncategorized, and are
+// marked dirty so that change syncs to your other devices too.
+export async function deleteCategory(id: string) {
+  const t = now();
+  await db.transaction('rw', db.categories, db.expenses, async () => {
+    await db.expenses
+      .where('category_id')
+      .equals(id)
+      .modify({ category_id: null, updated_at: t, dirty: 1 });
+    await db.categories.update(id, { deleted_at: t, updated_at: t, dirty: 1 });
   });
 }
