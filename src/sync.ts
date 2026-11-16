@@ -31,7 +31,7 @@ const TABLES = [
     {
         name: 'recurring',
         table: db.recurring as unknown as Table<any, string>,
-        cols: ['id', 'category_id', 'amount', 'note', 'day_of_month', 'starts_on',
+        cols: ['id', 'kind', 'category_id', 'amount', 'note', 'day_of_month', 'starts_on',
             'created_at', 'updated_at', 'deleted_at'],
     },
     {

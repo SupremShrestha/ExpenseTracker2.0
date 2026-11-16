@@ -28,6 +28,7 @@ function nextMonth(month: string): string {
 }
 
 // Creates any missing entries whose due date has arrived. Safe to run often.
+// Expense rules create expenses, income rules create income entries.
 // Returns how many entries were created.
 export async function generateRecurring(): Promise<number> {
   const rules = await db.recurring.filter((r) => !r.deleted_at).toArray();
@@ -38,6 +39,7 @@ export async function generateRecurring(): Promise<number> {
   let created = 0;
 
   for (const r of rules) {
+    const isIncome = r.kind === 'income';
     const startMonth = r.starts_on.slice(0, 7);
     const lastKey = `rec-last:${r.id}`;
     const saved = (await db.meta.get(lastKey))?.value;
@@ -49,9 +51,24 @@ export async function generateRecurring(): Promise<number> {
       const due = dueDate(month, r.day_of_month);
       if (due <= todayStr && due >= r.starts_on) {
         const id = await occurrenceId(r.id, month);
-        // Also skips entries you deleted on purpose (soft-deleted rows still exist)
-        if (!(await db.expenses.get(id))) {
-          const t = new Date().toISOString();
+        const t = new Date().toISOString();
+
+        // Soft-deleted rows still exist, so entries you deleted on purpose don't come back
+        if (isIncome) {
+          if (!(await db.income.get(id))) {
+            await db.income.add({
+              id,
+              amount: r.amount,
+              note: r.note,
+              received_on: due,
+              created_at: t,
+              updated_at: t,
+              deleted_at: null,
+              dirty: 1,
+            });
+            created++;
+          }
+        } else if (!(await db.expenses.get(id))) {
           await db.expenses.add({
             id,
             category_id: r.category_id,

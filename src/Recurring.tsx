@@ -8,9 +8,14 @@ import {
     today,
     type Recurring as Rule,
 } from "./db";
+import { useCategories } from "./useData";
+import { fmt } from "./format";
+
+type Kind = "expense" | "income";
 
 export default function Recurring() {
     const [editingId, setEditingId] = useState<string | null>(null);
+    const [kind, setKind] = useState<Kind>("expense");
     const [amount, setAmount] = useState("");
     const [note, setNote] = useState("");
     const [categoryId, setCategoryId] = useState("");
@@ -19,11 +24,7 @@ export default function Recurring() {
     const [error, setError] = useState("");
     const formRef = useRef<HTMLDivElement>(null);
 
-    const categories =
-        useLiveQuery(
-            () => db.categories.filter((c) => !c.deleted_at).sortBy("name"),
-            [],
-        ) ?? [];
+    const categories = useCategories();
     const rules =
         useLiveQuery(
             () =>
@@ -38,6 +39,7 @@ export default function Recurring() {
 
     function reset() {
         setEditingId(null);
+        setKind("expense");
         setAmount("");
         setNote("");
         setCategoryId("");
@@ -48,6 +50,7 @@ export default function Recurring() {
 
     function startEdit(r: Rule) {
         setEditingId(r.id);
+        setKind(r.kind === "income" ? "income" : "expense");
         setAmount(String(r.amount));
         setNote(r.note);
         setCategoryId(r.category_id ?? "");
@@ -72,12 +75,12 @@ export default function Recurring() {
         const data = {
             amount: Math.round(value * 100) / 100,
             note: note.trim(),
-            category_id: categoryId || null,
+            category_id: kind === "income" ? null : categoryId || null,
             day_of_month: d,
             starts_on: startsOn,
         };
         if (editingId) await updateRecurring(editingId, data);
-        else await addRecurring(data);
+        else await addRecurring({ ...data, kind });
         reset();
     }
 
@@ -93,62 +96,108 @@ export default function Recurring() {
     }
 
     return (
-        <details style={{ margin: "16px 0" }}>
-            <summary>
-                <b>Recurring expenses</b>
-            </summary>
+        <section className="card">
+            <h3>Recurring</h3>
 
-            <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
-                {rules.length === 0 && (
-                    <small>No recurring expenses yet.</small>
-                )}
+            {rules.length === 0 && (
+                <p className="muted small" style={{ margin: 0 }}>
+                    Rent, subscriptions, salary: add them once and they appear
+                    every month.
+                </p>
+            )}
 
-                {rules.map((r) => (
-                    <div
-                        key={r.id}
-                        style={{
-                            display: "flex",
-                            gap: 6,
-                            alignItems: "center",
-                            padding: "6px 8px",
-                            borderRadius: 10,
-                            border: `1px solid ${editingId === r.id ? "var(--accent)" : "transparent"}`,
-                        }}
+            <div style={{ display: "grid", gap: 6 }}>
+                {rules.map((r) => {
+                    const income = r.kind === "income";
+                    return (
+                        <div
+                            key={r.id}
+                            style={{
+                                display: "flex",
+                                gap: 6,
+                                alignItems: "center",
+                                padding: "6px 8px",
+                                borderRadius: 10,
+                                border: `1px solid ${editingId === r.id ? "var(--accent)" : "transparent"}`,
+                            }}
+                        >
+                            <span style={{ flex: 1, minWidth: 0 }}>
+                                <b
+                                    style={{
+                                        color: income ? "#22c55e" : undefined,
+                                    }}
+                                >
+                                    {income ? "+" : ""}
+                                    {fmt(r.amount)}
+                                </b>{" "}
+                                {r.note || (income ? "Income" : "No note")}
+                                <span className="muted small">
+                                    {" "}
+                                    ·{" "}
+                                    {income
+                                        ? "Income"
+                                        : catName(r.category_id)}{" "}
+                                    · day {r.day_of_month}
+                                </span>
+                            </span>
+                            <button onClick={() => startEdit(r)}>Edit</button>
+                            <button
+                                className="danger"
+                                onClick={() => remove(r)}
+                            >
+                                ✕
+                            </button>
+                        </div>
+                    );
+                })}
+            </div>
+
+            <div
+                ref={formRef}
+                style={{ display: "grid", gap: 8, paddingTop: 14 }}
+            >
+                <b>
+                    {editingId ? "Edit recurring item" : "Add recurring item"}
+                </b>
+
+                <div className="chips">
+                    <button
+                        type="button"
+                        className={`chip ${kind === "expense" ? "on" : ""}`}
+                        disabled={!!editingId}
+                        onClick={() => setKind("expense")}
                     >
-                        <span style={{ flex: 1, minWidth: 0 }}>
-                            {r.amount.toFixed(2)} · {r.note || "No note"} ·{" "}
-                            {catName(r.category_id)} · day {r.day_of_month}
-                        </span>
-                        <button onClick={() => startEdit(r)}>Edit</button>
-                        <button className="danger" onClick={() => remove(r)}>
-                            ✕
-                        </button>
-                    </div>
-                ))}
+                        Expense
+                    </button>
+                    <button
+                        type="button"
+                        className={`chip ${kind === "income" ? "on" : ""}`}
+                        disabled={!!editingId}
+                        onClick={() => setKind("income")}
+                    >
+                        Income
+                    </button>
+                </div>
 
-                <div
-                    ref={formRef}
-                    style={{ display: "grid", gap: 6, paddingTop: 8 }}
-                >
-                    <b>
-                        {editingId
-                            ? "Edit recurring expense"
-                            : "Add recurring expense"}
-                    </b>
-                    <input
-                        inputMode="decimal"
-                        placeholder="Amount"
-                        value={amount}
-                        onChange={(e) => {
-                            setAmount(e.target.value);
-                            setError("");
-                        }}
-                    />
-                    <input
-                        placeholder="Note (e.g. Rent)"
-                        value={note}
-                        onChange={(e) => setNote(e.target.value)}
-                    />
+                <input
+                    inputMode="decimal"
+                    placeholder="Amount"
+                    value={amount}
+                    onChange={(e) => {
+                        setAmount(e.target.value);
+                        setError("");
+                    }}
+                />
+                <input
+                    placeholder={
+                        kind === "income"
+                            ? "Source (e.g. Salary)"
+                            : "Note (e.g. Rent)"
+                    }
+                    value={note}
+                    onChange={(e) => setNote(e.target.value)}
+                />
+                {kind === "expense" && (
                     <select
                         value={categoryId}
                         onChange={(e) => setCategoryId(e.target.value)}
@@ -160,64 +209,54 @@ export default function Recurring() {
                             </option>
                         ))}
                     </select>
-                    <label
-                        style={{
-                            display: "flex",
-                            gap: 8,
-                            alignItems: "center",
-                        }}
+                )}
+                <label
+                    style={{ display: "flex", gap: 8, alignItems: "center" }}
+                >
+                    Day of month
+                    <input
+                        type="number"
+                        min={1}
+                        max={31}
+                        value={day}
+                        style={{ width: 70 }}
+                        onChange={(e) => setDay(e.target.value)}
+                    />
+                </label>
+                <label
+                    style={{ display: "flex", gap: 8, alignItems: "center" }}
+                >
+                    Starts on
+                    <input
+                        type="date"
+                        value={startsOn}
+                        onChange={(e) => setStartsOn(e.target.value)}
+                    />
+                </label>
+
+                {error && (
+                    <p className="error" style={{ margin: 0 }}>
+                        {error}
+                    </p>
+                )}
+
+                <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                        className="primary"
+                        style={{ flex: 1 }}
+                        onClick={save}
                     >
-                        Day of month
-                        <input
-                            type="number"
-                            min={1}
-                            max={31}
-                            value={day}
-                            style={{ width: 70 }}
-                            onChange={(e) => setDay(e.target.value)}
-                        />
-                    </label>
-                    <label
-                        style={{
-                            display: "flex",
-                            gap: 8,
-                            alignItems: "center",
-                        }}
-                    >
-                        Starts on
-                        <input
-                            type="date"
-                            value={startsOn}
-                            onChange={(e) => setStartsOn(e.target.value)}
-                        />
-                    </label>
-
-                    {error && (
-                        <p className="error" style={{ margin: 0 }}>
-                            {error}
-                        </p>
-                    )}
-
-                    <div style={{ display: "flex", gap: 8 }}>
-                        <button
-                            className="primary"
-                            style={{ flex: 1 }}
-                            onClick={save}
-                        >
-                            {editingId
-                                ? "Save changes"
-                                : "Add recurring expense"}
-                        </button>
-                        {editingId && <button onClick={reset}>Cancel</button>}
-                    </div>
-
-                    <small>
-                        {editingId
-                            ? "Changes apply to entries created from now on. Entries already created keep their old values (edit those from the list)."
-                            : "Entries appear automatically after the next sync. A day like 31 becomes the last day of shorter months."}
-                    </small>
+                        {editingId ? "Save changes" : "Add"}
+                    </button>
+                    {editingId && <button onClick={reset}>Cancel</button>}
                 </div>
+
+                <small>
+                    {editingId
+                        ? "Changes apply to entries created from now on. Entries already created keep their old values."
+                        : "Entries appear automatically after the next sync. A day like 31 becomes the last day of shorter months."}
+                </small>
             </div>
-        </details>
+        </section>
     );
 }

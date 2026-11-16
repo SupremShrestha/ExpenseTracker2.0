@@ -1,7 +1,20 @@
 import { useRef, useState } from "react";
+import type { Table } from "dexie";
 import { db, today, type Category, type Expense } from "./db";
 
-// ---------- CSV helpers ----------
+// ======================= shared helpers =======================
+function download(filename: string, blob: Blob) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+// ======================= CSV (expenses only) =======================
 const esc = (v: string | number) => {
     const s = String(v);
     return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -50,7 +63,6 @@ const dupKey = (
     note: string,
 ) => `${date}|${amount.toFixed(2)}|${catId ?? ""}|${note}`;
 
-// ---------- export ----------
 async function exportCsv() {
     const [cats, exps] = await Promise.all([
         db.categories.filter((c) => !c.deleted_at).toArray(),
@@ -70,21 +82,15 @@ async function exportCsv() {
         );
     }
     // BOM so Excel opens it as UTF-8
-    const blob = new Blob(["\uFEFF" + lines.join("\r\n")], {
-        type: "text/csv;charset=utf-8",
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `expenses-${today()}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    download(
+        `expenses-${today()}.csv`,
+        new Blob(["\uFEFF" + lines.join("\r\n")], {
+            type: "text/csv;charset=utf-8",
+        }),
+    );
     return exps.length;
 }
 
-// ---------- import ----------
 async function importCsv(text: string) {
     const rows = parseCsv(text);
     if (rows.length < 2) throw new Error("The file has no data rows.");
@@ -111,8 +117,8 @@ async function importCsv(text: string) {
             cats.map((c) => [c.name.trim().toLowerCase(), c.id]),
         );
 
-        // Duplicates are checked against what's already in the app (not within the file),
-        // so importing the same file twice doesn't double everything.
+        // Duplicates are checked against what's already in the app, so
+        // importing the same file twice doesn't double everything.
         const existing = await db.expenses
             .filter((e) => !e.deleted_at)
             .toArray();
@@ -187,61 +193,266 @@ async function importCsv(text: string) {
     return { added, dupes, invalid, newCats };
 }
 
-// ---------- UI ----------
+// ======================= full backup (JSON) =======================
+const isStr = (s: unknown) => typeof s === "string";
+const isNum = (n: unknown) => typeof n === "number" && Number.isFinite(n);
+const isDate = (s: unknown) =>
+    typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
+
+type SetDef = {
+    key: string;
+    table: Table<any, string>;
+    valid: (r: any) => boolean;
+    fix: (r: any) => any;
+};
+
+const SETS: SetDef[] = [
+    {
+        key: "categories",
+        table: db.categories as unknown as Table<any, string>,
+        valid: (r) => isStr(r.name),
+        fix: (r) => ({
+            ...r,
+            color: r.color ?? null,
+            budget: isNum(r.budget) ? r.budget : null,
+        }),
+    },
+    {
+        key: "recurring",
+        table: db.recurring as unknown as Table<any, string>,
+        valid: (r) =>
+            isNum(r.amount) &&
+            r.amount >= 0 &&
+            Number.isInteger(r.day_of_month) &&
+            r.day_of_month >= 1 &&
+            r.day_of_month <= 31 &&
+            isDate(r.starts_on),
+        fix: (r) => ({
+            ...r,
+            note: r.note ?? "",
+            category_id: r.category_id ?? null,
+            kind: r.kind === "income" ? "income" : "expense",
+        }),
+    },
+    {
+        key: "income",
+        table: db.income as unknown as Table<any, string>,
+        valid: (r) => isNum(r.amount) && r.amount >= 0 && isDate(r.received_on),
+        fix: (r) => ({ ...r, note: r.note ?? "" }),
+    },
+    {
+        key: "goals",
+        table: db.goals as unknown as Table<any, string>,
+        valid: (r) =>
+            isStr(r.name) &&
+            isNum(r.target) &&
+            r.target > 0 &&
+            isNum(r.saved) &&
+            r.saved >= 0,
+        fix: (r) => ({ ...r, deadline: r.deadline ?? null }),
+    },
+    {
+        key: "expenses",
+        table: db.expenses as unknown as Table<any, string>,
+        valid: (r) => isNum(r.amount) && r.amount >= 0 && isDate(r.spent_on),
+        fix: (r) => ({
+            ...r,
+            note: r.note ?? "",
+            category_id: r.category_id ?? null,
+        }),
+    },
+];
+
+const strip = (rows: any[]) =>
+    rows.map((r) => {
+        const o = { ...r };
+        delete o.dirty;
+        return o;
+    });
+
+async function exportJson() {
+    const out: Record<string, unknown> = {
+        app: "expense-tracker",
+        version: 1,
+        exported_at: new Date().toISOString(),
+    };
+    let count = 0;
+    for (const s of SETS) {
+        const rows = await s.table.filter((r: any) => !r.deleted_at).toArray();
+        out[s.key] = strip(rows);
+        count += rows.length;
+    }
+    download(
+        `expense-tracker-backup-${today()}.json`,
+        new Blob([JSON.stringify(out, null, 2)], { type: "application/json" }),
+    );
+    return count;
+}
+
+async function importJson(text: string) {
+    let data: any;
+    try {
+        data = JSON.parse(text);
+    } catch {
+        throw new Error("That file is not valid JSON.");
+    }
+    if (!data || data.app !== "expense-tracker" || data.version !== 1)
+        throw new Error("This is not an Expense Tracker backup file.");
+
+    let added = 0,
+        updated = 0,
+        current = 0,
+        invalid = 0;
+
+    await db.transaction("rw", db.tables, async () => {
+        for (const s of SETS) {
+            const rows: any[] = Array.isArray(data[s.key]) ? data[s.key] : [];
+            for (const raw of rows) {
+                if (
+                    !raw ||
+                    !isStr(raw.id) ||
+                    !isStr(raw.updated_at) ||
+                    !s.valid(raw)
+                ) {
+                    invalid++;
+                    continue;
+                }
+                const local: any = await s.table.get(raw.id);
+                // Keep whichever version is newer, so a restore never overwrites newer edits
+                if (
+                    local &&
+                    Date.parse(local.updated_at) >= Date.parse(raw.updated_at)
+                ) {
+                    current++;
+                    continue;
+                }
+                const row = s.fix({
+                    ...raw,
+                    created_at: raw.created_at ?? raw.updated_at,
+                    deleted_at: null,
+                    dirty: 1, // marks it for upload on the next sync
+                });
+                await s.table.put(row);
+                if (local) updated++;
+                else added++;
+            }
+        }
+    });
+
+    return { added, updated, current, invalid };
+}
+
+// ======================= UI =======================
 export default function DataTools() {
-    const fileRef = useRef<HTMLInputElement>(null);
+    const csvRef = useRef<HTMLInputElement>(null);
+    const jsonRef = useRef<HTMLInputElement>(null);
     const [msg, setMsg] = useState("");
 
-    async function onExport() {
+    async function run(fn: () => Promise<string>) {
         try {
-            const n = await exportCsv();
-            setMsg(`Exported ${n} expenses.`);
+            setMsg(await fn());
         } catch (e: any) {
-            setMsg(`Export failed: ${e?.message ?? e}`);
+            setMsg(`Failed: ${e?.message ?? e}`);
         }
     }
 
-    async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+    async function onCsvFile(e: React.ChangeEvent<HTMLInputElement>) {
         const file = e.target.files?.[0];
         e.target.value = "";
         if (!file) return;
-        try {
+        await run(async () => {
             const r = await importCsv(await file.text());
-            setMsg(
+            return (
                 `Imported ${r.added} expenses` +
-                    (r.dupes ? `, skipped ${r.dupes} duplicates` : "") +
-                    (r.invalid ? `, ${r.invalid} invalid rows ignored` : "") +
-                    (r.newCats ? `, created ${r.newCats} new categories` : "") +
-                    ".",
+                (r.dupes ? `, skipped ${r.dupes} duplicates` : "") +
+                (r.invalid ? `, ${r.invalid} invalid rows ignored` : "") +
+                (r.newCats ? `, created ${r.newCats} new categories` : "") +
+                "."
             );
-        } catch (err: any) {
-            setMsg(`Import failed: ${err?.message ?? err}`);
-        }
+        });
+    }
+
+    async function onJsonFile(e: React.ChangeEvent<HTMLInputElement>) {
+        const file = e.target.files?.[0];
+        e.target.value = "";
+        if (!file) return;
+        await run(async () => {
+            const r = await importJson(await file.text());
+            return (
+                `Restored ${r.added} new and ${r.updated} updated items` +
+                (r.current ? `, ${r.current} were already up to date` : "") +
+                (r.invalid ? `, ${r.invalid} invalid items ignored` : "") +
+                ". They will sync shortly."
+            );
+        });
     }
 
     return (
         <details style={{ margin: "16px 0" }}>
             <summary>
-                <b>Backup (CSV)</b>
+                <b>Backup &amp; restore</b>
             </summary>
-            <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+
+            <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
+                <b>Full backup (recommended)</b>
+                <small>
+                    Everything in one file: expenses, income, categories,
+                    budgets, recurring items and goals. Restore it into the same
+                    account.
+                </small>
                 <div style={{ display: "flex", gap: 8 }}>
-                    <button onClick={onExport}>Export CSV</button>
-                    <button onClick={() => fileRef.current?.click()}>
+                    <button
+                        className="primary"
+                        onClick={() =>
+                            run(
+                                async () =>
+                                    `Backed up ${await exportJson()} items.`,
+                            )
+                        }
+                    >
+                        Download backup
+                    </button>
+                    <button onClick={() => jsonRef.current?.click()}>
+                        Restore
+                    </button>
+                    <input
+                        ref={jsonRef}
+                        type="file"
+                        accept=".json,application/json"
+                        hidden
+                        onChange={onJsonFile}
+                    />
+                </div>
+
+                <b style={{ marginTop: 8 }}>Expenses as CSV</b>
+                <small>
+                    For spreadsheets. Columns: date (YYYY-MM-DD), amount,
+                    category, note. Unknown categories are created
+                    automatically.
+                </small>
+                <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                        onClick={() =>
+                            run(
+                                async () =>
+                                    `Exported ${await exportCsv()} expenses.`,
+                            )
+                        }
+                    >
+                        Export CSV
+                    </button>
+                    <button onClick={() => csvRef.current?.click()}>
                         Import CSV
                     </button>
                     <input
-                        ref={fileRef}
+                        ref={csvRef}
                         type="file"
                         accept=".csv,text/csv"
                         hidden
-                        onChange={onFile}
+                        onChange={onCsvFile}
                     />
                 </div>
-                <small>
-                    Columns: date (YYYY-MM-DD), amount, category, note. Unknown
-                    categories are created automatically.
-                </small>
+
                 {msg && <small>{msg}</small>}
             </div>
         </details>

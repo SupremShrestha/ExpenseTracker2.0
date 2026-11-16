@@ -25,6 +25,7 @@ export interface Expense {
 
 export interface Recurring {
   id: string;
+  kind: 'expense' | 'income';
   category_id: string | null;
   amount: number;
   note: string;
@@ -89,6 +90,25 @@ db.version(3).stores({
   goals: 'id, updated_at, dirty',
   meta: 'key',
 });
+
+// v4: recurring rules can now be income. Existing rules are expenses.
+db.version(4)
+  .stores({
+    expenses: 'id, spent_on, category_id, updated_at, dirty',
+    categories: 'id, updated_at, dirty',
+    recurring: 'id, category_id, updated_at, dirty',
+    income: 'id, received_on, updated_at, dirty',
+    goals: 'id, updated_at, dirty',
+    meta: 'key',
+  })
+  .upgrade(async (tx) => {
+    await tx
+      .table('recurring')
+      .toCollection()
+      .modify((r: any) => {
+        if (!r.kind) r.kind = 'expense';
+      });
+  });
 
 const now = () => new Date().toISOString();
 export const today = () => new Date().toLocaleDateString('en-CA'); // local YYYY-MM-DD
@@ -170,8 +190,9 @@ export async function deleteCategory(id: string) {
   });
 }
 
-// ---------- recurring rules ----------
+// ---------- recurring rules (expenses or income) ----------
 export async function addRecurring(input: {
+  kind: 'expense' | 'income';
   amount: number;
   note: string;
   category_id: string | null;
@@ -181,7 +202,8 @@ export async function addRecurring(input: {
   const t = now();
   await db.recurring.add({
     id: crypto.randomUUID(),
-    category_id: input.category_id,
+    kind: input.kind,
+    category_id: input.kind === 'income' ? null : input.category_id,
     amount: round2(input.amount),
     note: input.note,
     day_of_month: input.day_of_month,
