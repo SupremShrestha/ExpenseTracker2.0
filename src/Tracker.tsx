@@ -7,6 +7,8 @@ import Categories from "./Categories";
 import Recurring from "./Recurring";
 import DataTools from "./DataTools";
 import Yearly from "./Yearly";
+import Income from "./Income";
+import Goals from "./Goals";
 import ExpenseSheet from "./ExpenseSheet";
 
 const LIST_LIMIT = 200;
@@ -194,6 +196,8 @@ export default function Tracker() {
                 )}
             </section>
 
+            <Income month={month} spent={total} />
+
             <div className="card">
                 <Budgets expenses={expenses} categories={categories} />
             </div>
@@ -337,6 +341,10 @@ export default function Tracker() {
                     the search to see the rest.
                 </p>
             )}
+
+            <div style={{ marginTop: 20 }}>
+                <Goals />
+            </div>
 
             {/* ---------- tools ---------- */}
             <h3 style={{ marginTop: 28 }}>Tools</h3>

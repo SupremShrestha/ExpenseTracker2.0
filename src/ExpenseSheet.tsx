@@ -6,9 +6,21 @@ import {
     addExpense,
     updateExpense,
     deleteExpense,
+    addCategory,
     today,
     type Expense,
 } from "./db";
+
+const PALETTE = [
+    "#38bdf8",
+    "#34d399",
+    "#fbbf24",
+    "#f87171",
+    "#a78bfa",
+    "#fb923c",
+    "#f472b6",
+    "#2dd4bf",
+];
 
 type Props = {
     editing: Expense | null; // null = adding a new expense
@@ -21,6 +33,8 @@ export default function ExpenseSheet({ editing, onClose }: Props) {
     const [categoryId, setCategoryId] = useState(editing?.category_id ?? "");
     const [date, setDate] = useState(editing?.spent_on ?? today());
     const [error, setError] = useState("");
+    const [adding, setAdding] = useState(false);
+    const [newName, setNewName] = useState("");
 
     const categories =
         useLiveQuery(
@@ -68,6 +82,25 @@ export default function ExpenseSheet({ editing, onClose }: Props) {
     if (categoryId && byId.has(categoryId) && !chipIds.includes(categoryId))
         chipIds.push(categoryId);
     const extraIds = ordered.slice(6).filter((id) => !chipIds.includes(id));
+
+    async function createCategory() {
+        const name = newName.trim();
+        if (!name) return;
+        const existing = categories.find(
+            (c) => c.name.toLowerCase() === name.toLowerCase(),
+        );
+        if (existing) {
+            setCategoryId(existing.id);
+        } else {
+            const id = await addCategory(
+                name,
+                PALETTE[categories.length % PALETTE.length],
+            );
+            setCategoryId(id);
+        }
+        setNewName("");
+        setAdding(false);
+    }
 
     async function save(e: FormEvent) {
         e.preventDefault();
@@ -123,32 +156,65 @@ export default function ExpenseSheet({ editing, onClose }: Props) {
                     }}
                 />
 
-                {chipIds.length > 0 && (
-                    <div className="chips">
-                        {chipIds.map((id) => {
-                            const c = byId.get(id);
-                            if (!c) return null;
-                            return (
-                                <button
-                                    type="button"
-                                    key={id}
-                                    className={`chip ${categoryId === id ? "on" : ""}`}
-                                    onClick={() =>
-                                        setCategoryId(
-                                            categoryId === id ? "" : id,
-                                        )
-                                    }
-                                >
-                                    <i
-                                        className="swatch"
-                                        style={{
-                                            background: c.color ?? "#9ca3af",
-                                        }}
-                                    />
-                                    {c.name}
-                                </button>
-                            );
-                        })}
+                {/* Category row: always visible, so you can pick or create one */}
+                <div className="chips">
+                    {chipIds.map((id) => {
+                        const c = byId.get(id);
+                        if (!c) return null;
+                        return (
+                            <button
+                                type="button"
+                                key={id}
+                                className={`chip ${categoryId === id ? "on" : ""}`}
+                                onClick={() =>
+                                    setCategoryId(categoryId === id ? "" : id)
+                                }
+                            >
+                                <i
+                                    className="swatch"
+                                    style={{ background: c.color ?? "#9ca3af" }}
+                                />
+                                {c.name}
+                            </button>
+                        );
+                    })}
+                    <button
+                        type="button"
+                        className="chip"
+                        onClick={() => setAdding(!adding)}
+                    >
+                        + New
+                    </button>
+                </div>
+
+                {categories.length === 0 && !adding && (
+                    <p className="muted small" style={{ margin: 0 }}>
+                        No categories yet. Tap “+ New” to create your first one.
+                    </p>
+                )}
+
+                {adding && (
+                    <div style={{ display: "flex", gap: 6 }}>
+                        <input
+                            autoFocus
+                            placeholder="New category name"
+                            value={newName}
+                            style={{ flex: 1 }}
+                            onChange={(e) => setNewName(e.target.value)}
+                            onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                    e.preventDefault(); // don't submit the expense form
+                                    createCategory();
+                                }
+                            }}
+                        />
+                        <button
+                            type="button"
+                            className="primary"
+                            onClick={createCategory}
+                        >
+                            Create
+                        </button>
                     </div>
                 )}
 

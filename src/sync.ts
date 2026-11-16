@@ -21,7 +21,7 @@ export const getStatus = () => status;
 export const getError = () => lastError;
 
 // ---------- what to sync ----------
-// Order matters: categories first, because the others reference them.
+// Order matters: categories first, because expenses and recurring rules reference them.
 const TABLES = [
     {
         name: 'categories',
@@ -33,6 +33,16 @@ const TABLES = [
         table: db.recurring as unknown as Table<any, string>,
         cols: ['id', 'category_id', 'amount', 'note', 'day_of_month', 'starts_on',
             'created_at', 'updated_at', 'deleted_at'],
+    },
+    {
+        name: 'income',
+        table: db.income as unknown as Table<any, string>,
+        cols: ['id', 'amount', 'note', 'received_on', 'created_at', 'updated_at', 'deleted_at'],
+    },
+    {
+        name: 'goals',
+        table: db.goals as unknown as Table<any, string>,
+        cols: ['id', 'name', 'target', 'saved', 'deadline', 'created_at', 'updated_at', 'deleted_at'],
     },
     {
         name: 'expenses',
@@ -126,16 +136,19 @@ export async function syncNow() {
 }
 
 // ---------- start/stop (called once per logged-in user) ----------
+async function dirtyCount() {
+    let n = 0;
+    for (const t of TABLES) n += await t.table.where('dirty').equals(1).count();
+    return n;
+}
+
 export async function startSync(userId: string) {
     // If a different account logs in on this device, wipe local data so
     // the previous account's rows never get uploaded into this one.
     const owner = await db.meta.get('user_id');
     if (owner && owner.value !== userId) {
-        await db.transaction('rw', db.expenses, db.categories, db.recurring, db.meta, async () => {
-            await db.expenses.clear();
-            await db.categories.clear();
-            await db.recurring.clear();
-            await db.meta.clear();
+        await db.transaction('rw', db.tables, async () => {
+            for (const t of db.tables) await t.clear();
         });
     }
     await db.meta.put({ key: 'user_id', value: userId });
@@ -146,12 +159,7 @@ export async function startSync(userId: string) {
         clearTimeout(timer);
         timer = window.setTimeout(syncNow, 800);
     };
-    const sub = liveQuery(
-        async () =>
-            (await db.expenses.where('dirty').equals(1).count()) +
-            (await db.categories.where('dirty').equals(1).count()) +
-            (await db.recurring.where('dirty').equals(1).count())
-    ).subscribe((n) => { if (n > 0) schedule(); });
+    const sub = liveQuery(dirtyCount).subscribe((n) => { if (n > 0) schedule(); });
 
     const onOnline = () => syncNow();
     const onVisible = () => { if (document.visibilityState === 'visible') syncNow(); };

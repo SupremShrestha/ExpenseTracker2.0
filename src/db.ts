@@ -36,10 +36,35 @@ export interface Recurring {
   dirty: 0 | 1;
 }
 
+export interface Income {
+  id: string;
+  amount: number;
+  note: string;
+  received_on: string; // 'YYYY-MM-DD'
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+  dirty: 0 | 1;
+}
+
+export interface Goal {
+  id: string;
+  name: string;
+  target: number;
+  saved: number;
+  deadline: string | null; // 'YYYY-MM-DD'
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+  dirty: 0 | 1;
+}
+
 export const db = new Dexie('expense-tracker') as Dexie & {
   expenses: EntityTable<Expense, 'id'>;
   categories: EntityTable<Category, 'id'>;
   recurring: EntityTable<Recurring, 'id'>;
+  income: EntityTable<Income, 'id'>;
+  goals: EntityTable<Goal, 'id'>;
   meta: EntityTable<{ key: string; value: string }, 'key'>;
 };
 
@@ -56,8 +81,18 @@ db.version(2).stores({
   meta: 'key',
 });
 
+db.version(3).stores({
+  expenses: 'id, spent_on, category_id, updated_at, dirty',
+  categories: 'id, updated_at, dirty',
+  recurring: 'id, category_id, updated_at, dirty',
+  income: 'id, received_on, updated_at, dirty',
+  goals: 'id, updated_at, dirty',
+  meta: 'key',
+});
+
 const now = () => new Date().toISOString();
 export const today = () => new Date().toLocaleDateString('en-CA'); // local YYYY-MM-DD
+const round2 = (n: number) => Math.round(n * 100) / 100;
 
 // ---------- expenses ----------
 export async function addExpense(input: {
@@ -70,7 +105,7 @@ export async function addExpense(input: {
   await db.expenses.add({
     id: crypto.randomUUID(),
     category_id: input.category_id ?? null,
-    amount: Math.round(input.amount * 100) / 100,
+    amount: round2(input.amount),
     note: input.note ?? '',
     spent_on: input.spent_on ?? today(),
     created_at: t,
@@ -94,10 +129,12 @@ export async function deleteExpense(id: string) {
 }
 
 // ---------- categories ----------
+// Returns the new category's id so callers can select it straight away.
 export async function addCategory(name: string, color: string | null = null) {
   const t = now();
+  const id = crypto.randomUUID();
   await db.categories.add({
-    id: crypto.randomUUID(),
+    id,
     name: name.trim(),
     color,
     budget: null,
@@ -106,6 +143,7 @@ export async function addCategory(name: string, color: string | null = null) {
     deleted_at: null,
     dirty: 1,
   });
+  return id;
 }
 
 export async function updateCategory(
@@ -144,7 +182,7 @@ export async function addRecurring(input: {
   await db.recurring.add({
     id: crypto.randomUUID(),
     category_id: input.category_id,
-    amount: Math.round(input.amount * 100) / 100,
+    amount: round2(input.amount),
     note: input.note,
     day_of_month: input.day_of_month,
     starts_on: input.starts_on,
@@ -174,4 +212,77 @@ export async function updateRecurring(
 export async function deleteRecurring(id: string) {
   const t = now();
   await db.recurring.update(id, { deleted_at: t, updated_at: t, dirty: 1 });
+}
+
+// ---------- income ----------
+export async function addIncome(input: { amount: number; note: string; received_on: string }) {
+  const t = now();
+  await db.income.add({
+    id: crypto.randomUUID(),
+    amount: round2(input.amount),
+    note: input.note,
+    received_on: input.received_on,
+    created_at: t,
+    updated_at: t,
+    deleted_at: null,
+    dirty: 1,
+  });
+}
+
+export async function updateIncome(
+  id: string,
+  patch: Partial<Pick<Income, 'amount' | 'note' | 'received_on'>>
+) {
+  await db.income.update(id, { ...patch, updated_at: now(), dirty: 1 });
+}
+
+export async function deleteIncome(id: string) {
+  const t = now();
+  await db.income.update(id, { deleted_at: t, updated_at: t, dirty: 1 });
+}
+
+// ---------- savings goals ----------
+export async function addGoal(input: {
+  name: string;
+  target: number;
+  saved: number;
+  deadline: string | null;
+}) {
+  const t = now();
+  await db.goals.add({
+    id: crypto.randomUUID(),
+    name: input.name.trim(),
+    target: round2(input.target),
+    saved: round2(input.saved),
+    deadline: input.deadline,
+    created_at: t,
+    updated_at: t,
+    deleted_at: null,
+    dirty: 1,
+  });
+}
+
+export async function updateGoal(
+  id: string,
+  patch: Partial<Pick<Goal, 'name' | 'target' | 'saved' | 'deadline'>>
+) {
+  await db.goals.update(id, { ...patch, updated_at: now(), dirty: 1 });
+}
+
+// Add (positive) or take out (negative) money. Never goes below 0.
+export async function adjustGoal(id: string, delta: number) {
+  await db.transaction('rw', db.goals, async () => {
+    const g = await db.goals.get(id);
+    if (!g) return;
+    await db.goals.update(id, {
+      saved: Math.max(0, round2(g.saved + delta)),
+      updated_at: now(),
+      dirty: 1,
+    });
+  });
+}
+
+export async function deleteGoal(id: string) {
+  const t = now();
+  await db.goals.update(id, { deleted_at: t, updated_at: t, dirty: 1 });
 }
